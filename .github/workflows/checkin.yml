@@ -1,9 +1,9 @@
 name: UGQ 每日签到
 
 on:
-  # UTC 01:00 = 北京时间每天 09:00；GitHub 调度可能延迟。
+  # UTC 00:00 = 北京时间 08:00 启动，准备就绪后在 09:00 前随机签到。
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 0 * * *'
   workflow_dispatch:
   # 更新签到代码后立即验证；不改变每日签到时间。
   push:
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   checkin:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 75
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: '1'
@@ -60,6 +60,34 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
           command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+
+      - name: 等待北京时间 08:00—09:00 内的随机时间
+        if: github.event_name == 'schedule'
+        run: |
+          python - <<'PY'
+          import math
+          import secrets
+          import time
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+
+          tz = ZoneInfo('Asia/Shanghai')
+          now = datetime.now(tz)
+          start = now.replace(hour=8, minute=0, second=0, microsecond=0)
+          end = start + timedelta(hours=1)
+          if now >= end:
+              print('GitHub 调度已超过北京时间 09:00，本次立即补签。')
+          else:
+              earliest = max(now, start)
+              seconds_left = max(1, math.ceil((end - earliest).total_seconds()))
+              target = earliest + timedelta(seconds=secrets.randbelow(seconds_left))
+              print(f'本次随机签到时间：{target:%Y-%m-%d %H:%M:%S}（北京时间）', flush=True)
+              while True:
+                  remaining = (target - datetime.now(tz)).total_seconds()
+                  if remaining <= 0:
+                      break
+                  time.sleep(min(remaining, 60))
+          PY
 
       - name: 登录 UGQ 并签到
         env:
