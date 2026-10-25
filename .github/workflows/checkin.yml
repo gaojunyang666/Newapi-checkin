@@ -5,6 +5,13 @@ on:
   schedule:
     - cron: '0 1 * * *'
   workflow_dispatch:
+  # 更新签到代码后立即验证；不改变每日签到时间。
+  push:
+    branches: [main]
+    paths:
+      - 'checkin.py'
+      - 'tests/test_login_recovery.py'
+      - '.github/workflows/checkin.yml'
 
 permissions:
   contents: read
@@ -86,6 +93,7 @@ jobs:
               'url': 'https://ugq.ai',
               'session': client.session_cookie,
               'user_id': client.user_id,
+              'access_token': client.access_token,
               'name': 'UGQ',
               'login_username': os.environ['UGQ_USERNAME'],
               'login_password': os.environ['UGQ_PASSWORD'],

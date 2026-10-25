@@ -136,12 +136,32 @@ class NewAPICheckin:
                 return False
 
             if resp.status_code == 200 and data.get('success'):
-                # New API may require this header even for the first /self
-                # request after login. Do not reuse a previous account's ID.
                 login_data = data.get('data')
-                if isinstance(login_data, dict) and login_data.get('id') is not None:
-                    self.user_id = login_data['id']
+                if not isinstance(login_data, dict):
+                    login_data = {}
+                if login_data.get('require_2fa'):
+                    print('  [登录] 需要双重验证，尚未完成登录')
+                    return False
+
+                # Newer New API returns an auth bundle: access_token + user.
+                # Its refresh-session cookie alone does not authorize /self.
+                login_user = login_data.get('user', login_data)
+                if isinstance(login_user, dict) and login_user.get('id') is not None:
+                    self.user_id = login_user['id']
                     self.session.headers.update({'new-api-user': str(self.user_id)})
+                login_token = login_data.get('access_token')
+                if isinstance(login_token, str) and login_token:
+                    token_type = login_data.get('token_type', 'Bearer')
+                    if not isinstance(token_type, str) or token_type.lower() != 'bearer':
+                        print('  [登录] 不支持的登录令牌类型')
+                        return False
+                    if not isinstance(login_user, dict) or login_user.get('id') is None:
+                        print('  [登录] 登录令牌缺少账户信息')
+                        return False
+                    self.access_token = f'Bearer {login_token}'
+                    self.session.headers.update({'Authorization': self.access_token})
+                    print('  [登录] 登录成功，已启用访问令牌认证')
+                    return True
                 # 从响应 cookie 中获取新的 session_id
                 new_session = None
                 for cookie in resp.cookies:
