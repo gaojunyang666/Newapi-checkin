@@ -136,6 +136,12 @@ class NewAPICheckin:
                 return False
 
             if resp.status_code == 200 and data.get('success'):
+                # New API may require this header even for the first /self
+                # request after login. Do not reuse a previous account's ID.
+                login_data = data.get('data')
+                if isinstance(login_data, dict) and login_data.get('id') is not None:
+                    self.user_id = login_data['id']
+                    self.session.headers.update({'new-api-user': str(self.user_id)})
                 # 从响应 cookie 中获取新的 session_id
                 new_session = None
                 for cookie in resp.cookies:
