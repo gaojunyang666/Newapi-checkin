@@ -1,15 +1,25 @@
-name: NewAPI 自动签到
+name: UGQ 每日签到
 
 on:
-  # 定时执行：每天 UTC 0:10 (北京时间 8:10)
+  # UTC 01:00 = 北京时间每天 09:00；GitHub 调度可能延迟。
   schedule:
-    - cron: '10 0 * * *'
-  # 手动触发
+    - cron: '0 1 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ugq-daily-checkin
+  cancel-in-progress: false
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: '1'
 
     steps:
       - name: 检出代码
@@ -20,24 +30,34 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 安装依赖
-        run: pip install -r requirements.txt
-
-      - name: 安装 Playwright 浏览器
-        run: playwright install chromium --with-deps
-
-      - name: 确认 Chrome 与 xvfb
-        run: |
-          google-chrome --version
-          which xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
-
-      - name: 执行签到（xvfb 虚拟显示，含 Turnstile 解验证）
+      - name: 检查签到凭据
         env:
-          CONFIG_URL: ${{ secrets.CONFIG_URL }}
-          CONFIG_AUTH: ${{ secrets.CONFIG_AUTH }}
-          NEWAPI_ACCOUNTS: ${{ secrets.NEWAPI_ACCOUNTS }}
-          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          UGQ_PASSWORD: ${{ secrets.UGQ_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          if not os.environ.get('UGQ_PASSWORD'):
+              print('::error::请先在仓库 Settings → Secrets and variables → Actions 添加 UGQ_PASSWORD。')
+              sys.exit(1)
+          print('密码配置已存在；不会打印密码。')
+          PY
+
+      - name: 安装依赖
+        run: python -m pip install -r requirements.txt
+
+      - name: 验证自动登录逻辑
+        run: python -m unittest discover -s tests -v
+
+      - name: 安装浏览器依赖
+        run: |
+          python -m playwright install --with-deps chromium
+          command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+
+      - name: 登录 UGQ 并签到
+        env:
+          UGQ_USERNAME: ${{ secrets.UGQ_USERNAME || 'gaojunyang' }}
+          UGQ_PASSWORD: ${{ secrets.UGQ_PASSWORD }}
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
           EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
@@ -45,4 +65,30 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-        run: xvfb-run --auto-servernum python checkin.py
+        run: |
+          xvfb-run --auto-servernum python - <<'PY'
+          import json
+          import os
+          from checkin import NewAPICheckin, main
+
+          # 每次创建空会话，由脚本使用 Secrets 自动登录。
+          # 不依赖 ChatGPT 云端浏览器，也无需手动复制 Cookie。
+          os.environ.pop('CONFIG_URL', None)
+          os.environ.pop('CONFIG_AUTH', None)
+          client = NewAPICheckin(
+              'https://ugq.ai', '',
+              login_username=os.environ['UGQ_USERNAME'],
+              login_password=os.environ['UGQ_PASSWORD'],
+          )
+          if not client._try_login():
+              raise SystemExit('UGQ 自动登录未成功；本次未执行签到，请查看上方登录结果。')
+          os.environ['NEWAPI_ACCOUNTS'] = json.dumps([{
+              'url': 'https://ugq.ai',
+              'session': client.session_cookie,
+              'user_id': client.user_id,
+              'name': 'UGQ',
+              'login_username': os.environ['UGQ_USERNAME'],
+              'login_password': os.environ['UGQ_PASSWORD'],
+          }])
+          main()
+          PY
